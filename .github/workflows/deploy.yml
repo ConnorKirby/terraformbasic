@@ -164,6 +164,10 @@ jobs:
       - name: "📋 Terraform Plan (Review Only)"
         env:
           TF_VAR_admin_password: ${{ secrets.ADMIN_PASSWORD }}
+          ARM_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+          ARM_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID}}
+          ARM_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+          ARM_USE_OIDC: true
         run: |
           if [ "${{ github.event.inputs.destroy }}" == "true" ]; then
             echo "⚠️ RUNNING PLAN FOR DESTRUCTION"
@@ -250,6 +254,10 @@ jobs:
         if: github.event.inputs.destroy != 'true'
         env:
           TF_VAR_admin_password: ${{ secrets.ADMIN_PASSWORD }}
+          ARM_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+          ARM_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID}}
+          ARM_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+          ARM_USE_OIDC: true
         run: terraform apply -auto-approve
 
       # ----------------------------------------------------------------------
@@ -261,6 +269,10 @@ jobs:
         if: github.event.inputs.destroy == 'true'
         env:
           TF_VAR_admin_password: ${{ secrets.ADMIN_PASSWORD }}
+          ARM_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+          ARM_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID}}
+          ARM_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+          ARM_USE_OIDC: true
         run: terraform destroy -auto-approve
 
       # ----------------------------------------------------------------------

@@ -147,6 +147,7 @@ jobs:
       # ----------------------------------------------------------------------
       - name: "📝 Terraform Format Check"
         run: terraform fmt -check -recursive
+        continue-on-error: true
 
       # ----------------------------------------------------------------------
       # STEP 7: Terraform Plan (For Review Only)

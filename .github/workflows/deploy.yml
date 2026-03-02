@@ -9,6 +9,17 @@
 #    - Without backend, pipeline WILL FAIL at apply stage
 # 2. GitHub Environment 'production' must be created in Settings -> Environments
 #    - Add required reviewers to enable manual approval gate
+# 3. Federated Credential MUST be configured in Azure App Registration
+#    - See FEDERATED-CREDENTIAL-SETUP.md for complete setup instructions
+#    - Two federated credentials are needed (one for main branch, one for production environment)
+#    - Add the following GitHub Secrets (NOT the old AZURE_CREDENTIALS):
+#        AZURE_CLIENT_ID       - App Registration Application (client) ID
+#        AZURE_TENANT_ID       - Azure AD Tenant ID
+#        AZURE_SUBSCRIPTION_ID - Azure Subscription ID
+#
+# FEDERATED CREDENTIAL SUBJECTS REQUIRED IN AZURE:
+#   Plan job (branch trigger):       repo:<org>/<repo>:ref:refs/heads/main
+#   Apply job (environment trigger):  repo:<org>/<repo>:environment:production
 #
 # SECURE PATTERN:
 # 1. Split into two jobs: 'plan' and 'apply'
@@ -19,6 +30,7 @@
 # 6. No plan files are stored - prevents secret leakage from plan artifacts
 # 7. Both jobs authenticate independently (separate runners)
 # 8. Remote backend ensures state persistence across jobs
+# 9. OIDC federated credentials replace long-lived secrets - no rotation needed
 # ============================================================================
 
 # ============================================================================
@@ -36,8 +48,8 @@ on:
       - main
     # Only run if Terraform files or the pipeline itself changes
     paths:
-      - "**.tf" # Any Terraform file
-      - "**.tfvars" # Any Terraform variables file
+      - "**.tf"          # Any Terraform file
+      - "**.tfvars"      # Any Terraform variables file
       - ".github/workflows/**" # Pipeline changes
 
   # Allow manual trigger from GitHub Actions UI
@@ -53,8 +65,8 @@ on:
 # ENVIRONMENT VARIABLES: Values available to all jobs
 # ============================================================================
 env:
-  TF_VERSION: "1.6.0" # Terraform version to use
-  WORKING_DIR: "." # Directory containing Terraform files
+  TF_VERSION: "1.6.0"  # Terraform version to use
+  WORKING_DIR: "."      # Directory containing Terraform files
 
 # ============================================================================
 # JOBS: The actual work the pipeline does
@@ -69,6 +81,13 @@ jobs:
   plan:
     name: "Plan Infrastructure"
     runs-on: ubuntu-latest
+
+    # OIDC: Required permissions to request a federated identity token from GitHub
+    # id-token: write  - allows the job to mint an OIDC token for Azure to verify
+    # contents: read   - allows the job to checkout the repository
+    permissions:
+      id-token: write
+      contents: read
 
     # Set default settings for all steps in this job
     defaults:
@@ -92,12 +111,18 @@ jobs:
           terraform_version: ${{ env.TF_VERSION }}
 
       # ----------------------------------------------------------------------
-      # STEP 3: Azure Login
+      # STEP 3: Azure Login (Federated Credential / OIDC)
       # ----------------------------------------------------------------------
+      # OIDC replaces the single AZURE_CREDENTIALS JSON secret with three
+      # individual secrets. GitHub mints a short-lived OIDC token per run;
+      # Azure validates it against the registered federated credential subject.
+      # No secrets to rotate - tokens expire automatically after each run.
       - name: "🔐 Azure Login"
-        uses: azure/login@v1
+        uses: azure/login@v2
         with:
-          creds: ${{ secrets.AZURE_CREDENTIALS }}
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
 
       # ----------------------------------------------------------------------
       # STEP 4: Terraform Init
@@ -154,10 +179,20 @@ jobs:
     # This job only runs after 'plan' completes successfully
     needs: plan
 
-    # The environment gate creates a manual approval pause BEFORE this job runs
+    # The environment gate creates a manual approval pause BEFORE this job runs.
+    # OIDC NOTE: The federated credential for this job must use the subject:
+    #   repo:<org>/<repo>:environment:production
+    # This is DIFFERENT from the plan job subject (branch-based).
     environment:
       name: production
       url: https://portal.azure.com
+
+    # OIDC: Required permissions to request a federated identity token from GitHub
+    # id-token: write  - allows the job to mint an OIDC token for Azure to verify
+    # contents: read   - allows the job to checkout the repository
+    permissions:
+      id-token: write
+      contents: read
 
     defaults:
       run:
@@ -180,12 +215,17 @@ jobs:
           terraform_version: ${{ env.TF_VERSION }}
 
       # ----------------------------------------------------------------------
-      # STEP 3: Azure Login
+      # STEP 3: Azure Login (Federated Credential / OIDC)
       # ----------------------------------------------------------------------
+      # This job authenticates independently on its own fresh runner.
+      # GitHub issues a new short-lived OIDC token scoped to the
+      # 'production' environment subject for this job specifically.
       - name: "🔐 Azure Login"
-        uses: azure/login@v1
+        uses: azure/login@v2
         with:
-          creds: ${{ secrets.AZURE_CREDENTIALS }}
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
 
       # ----------------------------------------------------------------------
       # STEP 4: Terraform Init
@@ -229,7 +269,7 @@ jobs:
 # JOB 1: PLAN (For Review)
 # 1. Checks out your code from GitHub
 # 2. Installs Terraform
-# 3. Logs into Azure
+# 3. Logs into Azure via OIDC federated credential (branch subject)
 # 4. Initialises Terraform (downloads providers)
 # 5. Validates your Terraform code
 # 6. Checks code formatting
@@ -242,7 +282,7 @@ jobs:
 # JOB 2: APPLY (Runs ONLY after Plan succeeds AND manual approval)
 # 1. Checks out your code from GitHub (fresh runner)
 # 2. Sets up Terraform
-# 3. Logs into Azure
+# 3. Logs into Azure via OIDC federated credential (environment subject)
 # 4. Initializes Terraform
 # 5. Conditionally runs 'apply' OR 'destroy' based on workflow input
 #    - Creates Windows Server 2025 VM in Azure (if deploying)
@@ -255,12 +295,19 @@ jobs:
 # - Manual approval gate occurs BETWEEN jobs (environment: production)
 # - Apply job runs appropriate action after approval
 # - No plan files stored as artifacts (prevents potential secret leakage)
-# - Each job authenticates independently (separate runners)
+# - Each job authenticates independently (separate runners, separate OIDC tokens)
 # - Requires remote backend to persist state between runners
+# - OIDC tokens are short-lived and scoped per job - no secret rotation needed
 #
 # PREREQUISITES:
 # 1. Remote backend (Azure Storage) MUST be configured in your Terraform files
 # 2. 'production' environment MUST be created: Settings → Environments → 'production'
-# 3. Required reviewers MUST be added to the production environment (Yourself for this lab)
+# 3. Required reviewers MUST be added to the production environment
+# 4. Two federated credentials configured in Azure App Registration:
+#    - Subject: repo:<org>/<repo>:ref:refs/heads/main        (for plan job)
+#    - Subject: repo:<org>/<repo>:environment:production     (for apply job)
+# 5. GitHub Secrets required:
+#    - AZURE_CLIENT_ID, AZURE_TENANT_ID, AZURE_SUBSCRIPTION_ID
+#    - ADMIN_PASSWORD (unchanged)
+#    - Remove old AZURE_CREDENTIALS secret
 # ============================================================================
-

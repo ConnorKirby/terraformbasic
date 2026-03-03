@@ -108,6 +108,8 @@ resource "azurerm_windows_virtual_machine" "main" {
   size                = var.vm_size
   admin_username      = var.admin_username
   admin_password      = var.admin_password
+  patch_mode = "AutomaticByPlatform"
+  provision_vm_agent = true
 
   network_interface_ids = [
     azurerm_network_interface.main.id,
